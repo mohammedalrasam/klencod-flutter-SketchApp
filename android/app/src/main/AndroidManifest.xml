@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.your_app_name">
+    package="com.example.sketchapp">
 
     <!-- 1. صلاحية الإنترنت (ضرورية لعمل إعلانات AdMob) -->
     <uses-permission android:name="android.permission.INTERNET"/>
