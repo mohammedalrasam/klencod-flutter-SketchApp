@@ -1,7 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.sketchapp">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 1. صلاحية الإنترنت (ضرورية لعمل إعلانات AdMob) -->
     <uses-permission android:name="android.permission.INTERNET"/>
     
     <!-- 2. صلاحيات قراءة الصور من المعرض (لأجهزة الأندرويد القديمة) -->
@@ -21,7 +19,7 @@
         android:icon="@mipmap/ic_launcher">
         
         <!-- ============================================== -->
-        <!-- 4. معرف تطبيق AdMob (هذا هو السطر الذي حل الخطأ) -->
+        <!-- 4. معرف تطبيق AdMob (هذا هو السطر الذي حل الخطأ السابق) -->
         <!-- ============================================== -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
