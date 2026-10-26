@@ -393,8 +393,8 @@ class LoomisPainter extends CustomPainter {
     final rightEye = face.landmarks[FaceLandmarkType.rightEye];
     
     if (leftEye != null && rightEye != null) {
-      final leftEyePos = mapPoint(Offset(leftEye.position.x, leftEye.position.y));
-      final rightEyePos = mapPoint(Offset(rightEye.position.x, rightEye.position.y));
+      final leftEyePos = mapPoint(Offset(leftEye.position.x.toDouble(), leftEye.position.y.toDouble()));
+      final rightEyePos = mapPoint(Offset(rightEye.position.x.toDouble(), rightEye.position.y.toDouble()));
       final eyeY = (leftEyePos.dy + rightEyePos.dy) / 2;
 
       // الخطوة 1: دائرة الجمجمة
@@ -460,7 +460,7 @@ class LoomisPainter extends CustomPainter {
         final mouthPos = face.landmarks[FaceLandmarkType.bottomMouth];
         
         if (nosePos != null) {
-          final nPos = mapPoint(Offset(nosePos.position.x, nosePos.position.y));
+          final nPos = mapPoint(Offset(nosePos.position.x.toDouble(), nosePos.position.y.toDouble()));
           final nosePath = Path()
             ..moveTo(centerX, eyeY + (faceHeight * 0.1))
             ..lineTo(nPos.dx - (faceWidth * 0.08), nPos.dy)
@@ -469,7 +469,7 @@ class LoomisPainter extends CustomPainter {
         }
         
         if (mouthPos != null) {
-          final mPos = mapPoint(Offset(mouthPos.position.x, mouthPos.position.y));
+          final mPos = mapPoint(Offset(mouthPos.position.x.toDouble(), mouthPos.position.y.toDouble()));
           canvas.drawOval(Rect.fromCenter(center: mPos, width: faceWidth * 0.25, height: faceWidth * 0.1), guidePaint);
         }
       }
