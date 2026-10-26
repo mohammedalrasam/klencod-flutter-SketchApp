@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,9 +37,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Uint8List? _sketchImage;
   bool _isProcessing = false;
   
-  // متغيرات جديدة للتحكم في خطوات الرسم
-  bool _showSteps = false; // هل نعرض شاشة الخطوات؟
-  double _currentStep = 1.0; // الخطوة الحالية من 1 إلى 8
+  // متغيرات الخطوات واكتشاف الوجه
+  bool _showSteps = false;
+  double _currentStep = 1.0;
+  Face? _detectedFace; // بيانات الوجه المكتشف
+  Size? _imageSize; // الأبعاد الأصلية للصورة
 
   // متغيرات الإعلانات
   RewardedAd? _rewardedAd;
@@ -80,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _originalImage = File(pickedFile.path);
         _sketchImage = null;
+        _detectedFace = null;
         _showSteps = false;
         _currentStep = 1.0;
       });
@@ -101,12 +105,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _rewardedAd!.show(
         onUserEarnedReward: (AdWithoutView ad, RewardItem reward) {
-          // عند انتهاء الإعلان، نقوم بتفعيل وضع الخطوات وتوليد الرسم النهائي
-          setState(() {
-            _showSteps = true; 
-            _currentStep = 1.0;
-          });
-          _convertToSketch();
+          // عند انتهاء الإعلان: نكتشف الوجه ونبدأ المعالجة
+          _processImageWithAI(); 
         },
       );
       _rewardedAd = null;
@@ -119,9 +119,59 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // دالة اكتشاف الوجه باستخدام الذكاء الاصطناعي
+  Future<void> _processImageWithAI() async {
+    if (_originalImage == null) return;
+    
+    setState(() {
+      _isProcessing = true;
+      _showSteps = true;
+      _currentStep = 1.0;
+    });
+
+    try {
+      // 1. الحصول على أبعاد الصورة
+      final decodedImage = await decodeImageFromList(await _originalImage!.readAsBytes());
+      _imageSize = Size(decodedImage.width.toDouble(), decodedImage.height.toDouble());
+
+      // 2. إعداد كاشف الوجه
+      final options = FaceDetectorOptions(
+        enableLandmarks: true,
+        performanceMode: FaceDetectorMode.accurate,
+      );
+      final faceDetector = FaceDetector(options: options);
+
+      // 3. اكتشاف الوجه
+      final inputImage = InputImage.fromFilePath(_originalImage!.path);
+      final faces = await faceDetector.processImage(inputImage);
+
+      if (faces.isNotEmpty) {
+        setState(() {
+          _detectedFace = faces.first; // نأخذ أول وجه يتم اكتشافه
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('لم يتم اكتشاف وجه في الصورة. يرجى استخدام صورة أوضح.')),
+        );
+        setState(() => _showSteps = false);
+      }
+
+      faceDetector.close();
+
+      // 4. توليد الرسم الرصاصي النهائي (الخطوة 8)
+      await _convertToSketch();
+
+    } catch (e) {
+      debugPrint("Error: $e");
+      setState(() {
+        _isProcessing = false;
+        _showSteps = false;
+      });
+    }
+  }
+
   Future<void> _convertToSketch() async {
     if (_originalImage == null) return;
-    setState(() => _isProcessing = true);
 
     try {
       final bytes = await _originalImage!.readAsBytes();
@@ -167,6 +217,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 _originalImage = null;
                 _sketchImage = null;
                 _showSteps = false;
+                _detectedFace = null;
               }),
             )
         ],
@@ -186,7 +237,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           
-          // شريط التحكم بالخطوات (يظهر فقط إذا تم تفعيل الخطوات)
           if (_showSteps && _originalImage != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -214,7 +264,6 @@ class _HomeScreenState extends State<HomeScreen> {
             
           const SizedBox(height: 10),
 
-          // أزرار التحكم
           Padding(
             padding: const EdgeInsets.only(bottom: 20, left: 16, right: 16),
             child: Row(
@@ -243,7 +292,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildMainDisplay() {
-    if (_isProcessing && _sketchImage == null) {
+    if (_isProcessing && _sketchImage == null && _currentStep < 8) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_originalImage == null) {
@@ -252,139 +301,178 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 1. الصورة الأصلية في الخلفية
-          Image.file(_originalImage!, fit: BoxFit.contain),
-          
-          // 2. طبقة رسم خطوات لوميس (تظهر حسب الخطوة الحالية)
-          if (_showSteps && _currentStep < 8)
-            CustomPaint(
-              painter: LoomisPainter(step: _currentStep),
-            ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              // 1. الصورة الأصلية
+              Image.file(_originalImage!, fit: BoxFit.contain),
+              
+              // 2. طبقة رسم خطوات لوميس الحقيقية
+              if (_showSteps && _currentStep < 8 && _detectedFace != null && _imageSize != null)
+                CustomPaint(
+                  painter: LoomisPainter(
+                    face: _detectedFace!,
+                    imageSize: _imageSize!,
+                    step: _currentStep,
+                    containerSize: Size(constraints.maxWidth, constraints.maxHeight),
+                  ),
+                ),
 
-          // 3. الرسم النهائي (يظهر فقط في الخطوة 8)
-          if (_showSteps && _currentStep == 8 && _sketchImage != null)
-            Container(
-              color: Colors.white, // خلفية بيضاء للرسم النهائي
-              child: Image.memory(_sketchImage!, fit: BoxFit.contain),
-            ),
-            
-          // مؤشر التحميل إذا كان في الخطوة 8 ولا يزال ينتج الرسم
-          if (_showSteps && _currentStep == 8 && _sketchImage == null)
-            const Center(child: CircularProgressIndicator()),
-        ],
+              // 3. الرسم النهائي (الخطوة 8)
+              if (_showSteps && _currentStep == 8 && _sketchImage != null)
+                Container(
+                  color: Colors.white,
+                  child: Image.memory(_sketchImage!, fit: BoxFit.contain),
+                ),
+                
+              if (_showSteps && _currentStep == 8 && _sketchImage == null)
+                const Center(child: CircularProgressIndicator()),
+            ],
+          );
+        },
       ),
     );
   }
 }
 
 // =====================================================================
-// كلاس رسم خطوات لوميس
-// ملاحظة: هذا الرسم تقريبي ومبني على النسب الرياضية للصورة.
-// لتطابق تام 100%، يتم استبدال الإحداثيات بنقاط اكتشاف الوجه (Face Detection).
+// كلاس رسم خطوات لوميس بناءً على إحداثيات الوجه المكتشفة
 // =====================================================================
 class LoomisPainter extends CustomPainter {
+  final Face face;
+  final Size imageSize;
   final double step;
+  final Size containerSize;
 
-  LoomisPainter({required this.step});
+  LoomisPainter({
+    required this.face,
+    required this.imageSize,
+    required this.step,
+    required this.containerSize,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    // إعداد الأقلام
     final guidePaint = Paint()
-      ..color = Colors.pinkAccent.withOpacity(0.8)
+      ..color = Colors.pinkAccent.withOpacity(0.9)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0;
 
     final constructionPaint = Paint()
-      ..color = Colors.blueAccent.withOpacity(0.6)
+      ..color = Colors.blueAccent.withOpacity(0.7)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
 
-    // افتراض أن الوجه في منتصف الصورة (لتقريب الشكل)
-    final centerX = size.width / 2;
-    final centerY = size.height / 2;
-    final faceWidth = size.width * 0.4; // عرض الوجه التقريبي
-    final faceHeight = size.height * 0.6; // طول الوجه التقريبي
+    // حساب التكبير/التصغير (Scale) ليتطابق رسم الـ Canvas مع الصورة
+    final scaleX = size.width / imageSize.width;
+    final scaleY = size.height / imageSize.height;
+    // نستخدم أصغر نسبة لضمان عدم تشوه الرسم (لأن BoxFit.contain يحافظ على النسبة)
+    final scale = scaleX < scaleY ? scaleX : scaleY; 
 
-    // الخطوة 1: رسم دائرة الجمجمة
-    if (step >= 1) {
-      canvas.drawCircle(Offset(centerX, centerY - faceHeight * 0.1), faceWidth * 0.6, guidePaint);
+    // حساب الإزاحة (Offset) للصورة داخل الحاوية
+    final dx = (size.width - (imageSize.width * scale)) / 2;
+    final dy = (size.height - (imageSize.height * scale)) / 2;
+
+    // دالة مساعدة لتحويل إحداثيات الصورة الأصلية إلى إحداثيات الشاشة
+    Offset mapPoint(Offset point) {
+      return Offset((point.dx * scale) + dx, (point.dy * scale) + dy);
     }
 
-    // الخطوة 2: رسم خط الفك والذقن
-    if (step >= 2) {
-      final jawPath = Path()
-        ..moveTo(centerX - faceWidth * 0.6, centerY - faceHeight * 0.1)
-        ..quadraticBezierTo(
-          centerX - faceWidth * 0.5, centerY + faceHeight * 0.4,
-          centerX, centerY + faceHeight * 0.4, // الذقن
-        )
-        ..quadraticBezierTo(
-          centerX + faceWidth * 0.5, centerY + faceHeight * 0.4,
-          centerX + faceWidth * 0.6, centerY - faceHeight * 0.1,
+    // إحداثيات الوجه
+    final faceRect = face.boundingBox;
+    final topLeft = mapPoint(Offset(faceRect.left, faceRect.top));
+    final bottomRight = mapPoint(Offset(faceRect.right, faceRect.bottom));
+    final faceWidth = bottomRight.dx - topLeft.dx;
+    final faceHeight = bottomRight.dy - topLeft.dy;
+    final centerX = topLeft.dx + (faceWidth / 2);
+
+    // استخراج النقاط الرئيسية
+    final leftEye = face.landmarks[FaceLandmarkType.leftEye];
+    final rightEye = face.landmarks[FaceLandmarkType.rightEye];
+    
+    if (leftEye != null && rightEye != null) {
+      final leftEyePos = mapPoint(Offset(leftEye.position.x, leftEye.position.y));
+      final rightEyePos = mapPoint(Offset(rightEye.position.x, rightEye.position.y));
+      final eyeY = (leftEyePos.dy + rightEyePos.dy) / 2;
+
+      // الخطوة 1: دائرة الجمجمة
+      if (step >= 1) {
+        canvas.drawCircle(
+          Offset(centerX, topLeft.dy + (faceHeight * 0.35)), 
+          faceWidth * 0.5, 
+          guidePaint
         );
-      canvas.drawPath(jawPath, guidePaint);
-    }
+      }
 
-    // الخطوة 3: الخط المركزي (الأنف)
-    if (step >= 3) {
-      canvas.drawLine(
-        Offset(centerX, centerY - faceHeight * 0.5),
-        Offset(centerX, centerY + faceHeight * 0.4),
-        guidePaint,
-      );
-    }
+      // الخطوة 2: خط منتصف الوجه
+      if (step >= 2) {
+        canvas.drawLine(
+          Offset(centerX, topLeft.dy),
+          Offset(centerX, bottomRight.dy + (faceHeight * 0.1)), // تمتد قليلاً تحت الذقن
+          guidePaint,
+        );
+      }
 
-    // الخطوة 4: خط العينين (Brow Line)
-    if (step >= 4) {
-      final eyeLineY = centerY - faceHeight * 0.05;
-      canvas.drawLine(
-        Offset(centerX - faceWidth * 0.6, eyeLineY),
-        Offset(centerX + faceWidth * 0.6, eyeLineY),
-        constructionPaint,
-      );
-    }
+      // الخطوة 3: خط العينين
+      if (step >= 3) {
+        canvas.drawLine(
+          Offset(leftEyePos.dx - (faceWidth * 0.2), eyeY),
+          Offset(rightEyePos.dx + (faceWidth * 0.2), eyeY),
+          constructionPaint,
+        );
+      }
 
-    // الخطوة 5: قسمة الوجه إلى أثلاث (لرسم الأنف والفم)
-    if (step >= 5) {
-      final browY = centerY - faceHeight * 0.05;
-      final chinY = centerY + faceHeight * 0.4;
-      final noseY = browY + (chinY - browY) / 3;
-      final mouthY = browY + 2 * (chinY - browY) / 3;
+      // الخطوة 4: خط الفك والذقن
+      if (step >= 4) {
+        final jawPath = Path()
+          ..moveTo(leftEyePos.dx - (faceWidth * 0.3), eyeY)
+          ..quadraticBezierTo(
+            leftEyePos.dx - (faceWidth * 0.3), bottomRight.dy - (faceHeight * 0.2),
+            centerX, bottomRight.dy,
+          )
+          ..quadraticBezierTo(
+            rightEyePos.dx + (faceWidth * 0.3), bottomRight.dy - (faceHeight * 0.2),
+            rightEyePos.dx + (faceWidth * 0.3), eyeY,
+          );
+        canvas.drawPath(jawPath, constructionPaint);
+      }
 
-      canvas.drawLine(Offset(centerX - faceWidth * 0.4, noseY), Offset(centerX + faceWidth * 0.4, noseY), constructionPaint);
-      canvas.drawLine(Offset(centerX - faceWidth * 0.3, mouthY), Offset(centerX + faceWidth * 0.3, mouthY), constructionPaint);
-    }
+      // الخطوة 5: خطوط قسمة الوجه (الأنف والفم)
+      if (step >= 5) {
+        final noseY = eyeY + (bottomRight.dy - eyeY) / 3;
+        final mouthY = eyeY + 2 * (bottomRight.dy - eyeY) / 3;
+        
+        canvas.drawLine(Offset(topLeft.dx, noseY), Offset(bottomRight.dx, noseY), constructionPaint);
+        canvas.drawLine(Offset(topLeft.dx + (faceWidth * 0.1), mouthY), Offset(bottomRight.dx - (faceWidth * 0.1), mouthY), constructionPaint);
+      }
 
-    // الخطوة 6: رسم العينين
-    if (step >= 6) {
-      final eyeY = centerY - faceHeight * 0.05;
-      final eyeSpacing = faceWidth * 0.35;
-      // العين اليسرى
-      canvas.drawOval(Rect.fromCenter(center: Offset(centerX - eyeSpacing, eyeY), width: faceWidth * 0.2, height: faceWidth * 0.08), guidePaint);
-      // العين اليمنى
-      canvas.drawOval(Rect.fromCenter(center: Offset(centerX + eyeSpacing, eyeY), width: faceWidth * 0.2, height: faceWidth * 0.08), guidePaint);
-    }
+      // الخطوة 6: رسم العينين
+      if (step >= 6) {
+        canvas.drawOval(Rect.fromCenter(center: leftEyePos, width: faceWidth * 0.2, height: faceWidth * 0.08), guidePaint);
+        canvas.drawOval(Rect.fromCenter(center: rightEyePos, width: faceWidth * 0.2, height: faceWidth * 0.08), guidePaint);
+      }
 
-    // الخطوة 7: رسم الأنف والفم (أشكال هندسية)
-    if (step >= 7) {
-      final browY = centerY - faceHeight * 0.05;
-      final chinY = centerY + faceHeight * 0.4;
-      final noseY = browY + (chinY - browY) / 3;
-      final mouthY = browY + 2 * (chinY - browY) / 3;
-
-      // الأنف (مثلث)
-      final nosePath = Path()
-        ..moveTo(centerX, noseY - faceHeight * 0.1)
-        ..lineTo(centerX - faceWidth * 0.1, noseY)
-        ..lineTo(centerX + faceWidth * 0.1, noseY);
-      canvas.drawPath(nosePath, guidePaint);
-
-      // الفم (شكل بيضاوي)
-      canvas.drawOval(Rect.fromCenter(center: Offset(centerX, mouthY), width: faceWidth * 0.25, height: faceWidth * 0.1), guidePaint);
+      // الخطوة 7: رسم الأنف والفم تقريبياً
+      if (step >= 7) {
+        final nosePos = face.landmarks[FaceLandmarkType.noseBase];
+        final mouthPos = face.landmarks[FaceLandmarkType.bottomMouth];
+        
+        if (nosePos != null) {
+          final nPos = mapPoint(Offset(nosePos.position.x, nosePos.position.y));
+          final nosePath = Path()
+            ..moveTo(centerX, eyeY + (faceHeight * 0.1))
+            ..lineTo(nPos.dx - (faceWidth * 0.08), nPos.dy)
+            ..lineTo(nPos.dx + (faceWidth * 0.08), nPos.dy);
+          canvas.drawPath(nosePath, guidePaint);
+        }
+        
+        if (mouthPos != null) {
+          final mPos = mapPoint(Offset(mouthPos.position.x, mouthPos.position.y));
+          canvas.drawOval(Rect.fromCenter(center: mPos, width: faceWidth * 0.25, height: faceWidth * 0.1), guidePaint);
+        }
+      }
     }
   }
 
